@@ -15,6 +15,8 @@ import java.util.List;
  * @author Alexander Shabanov
  */
 public class MigrationAppLauncher implements Runnable {
+  private final int batchLimit = 128;
+
   @Resource(name = "old.dao.jdbcTemplate")
   JdbcOperations oldDb;
 
@@ -39,6 +41,7 @@ public class MigrationAppLauncher implements Runnable {
   @Override
   public void run() {
     copyAuthors();
+    copyGenres();
   }
 
   //
@@ -46,20 +49,73 @@ public class MigrationAppLauncher implements Runnable {
   //
 
   private void copyAuthors() {
-    final List<NamedValue> authors = oldDb.query("SELECT id, f_name AS name FROM author", new NamedValueMapper());
-    bookDb.batchUpdate("INSERT INTO person (id, f_name) VALUES (?, ?)", new BatchPreparedStatementSetter() {
-      @Override
-      public void setValues(PreparedStatement ps, int i) throws SQLException {
-        ps.setLong(1, authors.get(i).id);
-        ps.setString(2, authors.get(i).name);
+    Long lastId = null;
+    int inserted = 0;
+
+    for (;;) {
+      final List<NamedValue> authors = oldDb.query(
+          "SELECT id, f_name AS name FROM author WHERE (? IS NULL) OR (id = ?) ORDER BY id LIMIT ?",
+          new NamedValueMapper(), lastId, lastId, batchLimit);
+
+      bookDb.batchUpdate("INSERT INTO person (id, f_name) VALUES (?, ?)", new BatchPreparedStatementSetter() {
+        @Override
+        public void setValues(PreparedStatement ps, int i) throws SQLException {
+          ps.setLong(1, authors.get(i).id);
+          ps.setString(2, authors.get(i).name);
+        }
+
+        @Override
+        public int getBatchSize() {
+          return authors.size();
+        }
+      });
+
+      System.out.println(" > AUTHORS INSERTED: " + inserted);
+
+      if (authors.size() != batchLimit) {
+        break;
       }
 
-      @Override
-      public int getBatchSize() {
-        return authors.size();
+      lastId = authors.get(authors.size() - 1).id;
+      inserted += authors.size();
+    }
+
+    System.out.println("ALL AUTHORS INSERTED");
+  }
+
+  private void copyGenres() {
+    Long lastId = null;
+    int inserted = 0;
+
+    for (;;) {
+      final List<NamedValue> genres = oldDb.query(
+          "SELECT id, code AS name FROM genre WHERE (? IS NULL) OR (id = ?) ORDER BY id LIMIT ?",
+          new NamedValueMapper(), lastId, lastId, batchLimit);
+
+      bookDb.batchUpdate("INSERT INTO genre (id, code) VALUES (?, ?)", new BatchPreparedStatementSetter() {
+        @Override
+        public void setValues(PreparedStatement ps, int i) throws SQLException {
+          ps.setLong(1, genres.get(i).id);
+          ps.setString(2, genres.get(i).name);
+        }
+
+        @Override
+        public int getBatchSize() {
+          return genres.size();
+        }
+      });
+
+      System.out.println(" > GENRES INSERTED: " + inserted);
+
+      if (genres.size() != batchLimit) {
+        break;
       }
-    });
-    System.out.println("AUTHORS INSERTED");
+
+      lastId = genres.get(genres.size() - 1).id;
+      inserted += genres.size();
+    }
+
+    System.out.println("ALL GENRES INSERTED");
   }
 
   private static final class NamedValue {
